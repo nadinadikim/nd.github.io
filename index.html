@@ -10,46 +10,25 @@
 
   <style>
     body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .layout {
-      display: grid;
-      grid-template-columns: 1fr 360px;
-      height: 100vh;
-    }
-    #cy {
-      width: 100%;
-      height: 100%;
-      background: #fff;
-      border-right: 1px solid #e6e6e6;
-    }
-    .side {
-      padding: 14px;
-      overflow: auto;
-    }
-    .card {
-      border: 1px solid #e6e6e6;
-      border-radius: 12px;
-      padding: 12px;
-      margin-bottom: 12px;
-    }
+    .layout { display: grid; grid-template-columns: 1fr 360px; height: 100vh; }
+    #cy { width: 100%; height: 100%; background: #fff; border-right: 1px solid #e6e6e6; }
+    .side { padding: 14px; overflow: auto; }
+    .card { border: 1px solid #e6e6e6; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
     .row { display: flex; gap: 8px; align-items: center; }
     input[type="text"] { width: 100%; padding: 8px 10px; border:1px solid #ddd; border-radius: 10px; }
     button { padding: 8px 10px; border:1px solid #ddd; border-radius: 10px; background:#fff; cursor:pointer; }
     button:hover { background:#f4f4f4; }
     .muted { color:#666; font-size: 0.92rem; }
-    .pill {
-      display:inline-block; padding: 2px 8px; border:1px solid #ddd;
-      border-radius:999px; margin:2px; font-size:0.85rem;
-    }
+    .pill { display:inline-block; padding: 2px 8px; border:1px solid #ddd; border-radius:999px; margin:2px; font-size:0.85rem; }
     h1 { margin: 0 0 8px 0; font-size: 1.2rem; }
     h2 { margin: 0 0 8px 0; font-size: 1rem; }
-    h3 { margin: 10px 0 6px 0; font-size: 0.95rem; }
     .small { font-size: 0.9rem; }
     .sep { height: 1px; background: #eee; margin: 10px 0; }
     .warn { color: #b45309; }
-    a { color: inherit; }
-    pre { white-space: pre-wrap; word-break: break-word; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
   </style>
 </head>
+
 <body>
   <div class="layout">
     <div id="cy"></div>
@@ -57,7 +36,10 @@
     <div class="side">
       <div class="card">
         <h1>Zotero Topic Graph</h1>
-        <div class="muted">Loads <code>graph.json</code> from GitHub Pages.</div>
+        <div class="muted">
+          GitHub Pages compatible loader. Data source:
+          <code id="dataUrl">(loading)</code>
+        </div>
 
         <div class="sep"></div>
 
@@ -72,7 +54,7 @@
           <input id="searchBox" type="text" placeholder="Search topics or papers..." />
         </div>
         <div class="muted small" style="margin-top:6px;">
-          Tip: search narrows to matching nodes + neighbors.
+          Search keeps matches + their neighbors.
         </div>
 
         <div class="sep"></div>
@@ -101,9 +83,15 @@
         .replaceAll(">","&gt;").replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
 
+    // GitHub Pages safe URL builder:
+    // If your site is https://user.github.io/repo/, this resolves to https://user.github.io/repo/graph.json
+    const GRAPH_URL = new URL("graph.json", window.location.href).toString();
+
     async function loadGraph() {
-      const res = await fetch("./graph.json", { cache: "no-store" });
-      if (!res.ok) throw new Error(`Failed to load graph.json: ${res.status}`);
+      const res = await fetch(GRAPH_URL, { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`Failed to load graph.json (${res.status}). URL=${GRAPH_URL}`);
+      }
       return res.json();
     }
 
@@ -112,10 +100,14 @@
       const papers = graph.papers || [];
       const edges = graph.edges || [];
 
+      const nodeIds = new Set();
       const els = [];
 
-      // Topic nodes
+      // Topics
       for (const t of topics) {
+        if (!t?.id) continue;
+        if (nodeIds.has(t.id)) continue;
+        nodeIds.add(t.id);
         els.push({
           data: {
             id: t.id,
@@ -128,8 +120,11 @@
         });
       }
 
-      // Paper nodes
+      // Papers (skip missing ids)
       for (const p of papers) {
+        if (!p?.id) continue;
+        if (nodeIds.has(p.id)) continue;
+        nodeIds.add(p.id);
         els.push({
           data: {
             id: p.id,
@@ -144,12 +139,13 @@
         });
       }
 
-      // Edges
+      // Edges (only if both ends exist)
       for (const e of edges) {
-        if (!e.source || !e.target) continue;
+        if (!e?.source || !e?.target) continue;
+        if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
         els.push({
           data: {
-            id: e.id || `${e.source}__${e.target}`,
+            id: e.id || `${e.source}__${e.target}__${e.type || "edge"}`,
             source: e.source,
             target: e.target,
             type: e.type || "edge",
@@ -166,7 +162,6 @@
         container: document.getElementById("cy"),
         elements,
         style: [
-          // Base node style
           {
             selector: "node",
             style: {
@@ -183,18 +178,16 @@
               "height": 28
             }
           },
-          // Topic nodes (bigger)
           {
             selector: 'node[kind="topic"]',
             style: {
               "shape": "round-rectangle",
-              "width": 110,
-              "height": 46,
+              "width": 120,
+              "height": 48,
               "font-size": 11,
               "border-width": 2
             }
           },
-          // Paper nodes (smaller, label hidden until zoom)
           {
             selector: 'node[kind="paper"]',
             style: {
@@ -205,13 +198,10 @@
               "text-opacity": 0.0
             }
           },
-          // Show paper labels when zoomed in
           {
             selector: 'node[kind="paper"].showLabel',
             style: { "text-opacity": 1.0 }
           },
-
-          // Edges
           {
             selector: "edge",
             style: {
@@ -222,16 +212,10 @@
               "opacity": 0.9
             }
           },
-          // topic-topic edges heavier
           {
             selector: 'edge[type="topic-topic"]',
-            style: {
-              "width": 2,
-              "line-color": "#bdbdbd"
-            }
+            style: { "width": 2, "line-color": "#bdbdbd" }
           },
-
-          // Selection
           {
             selector: ":selected",
             style: {
@@ -240,8 +224,6 @@
               "line-color": "#3b82f6"
             }
           },
-
-          // Faded for filtering
           {
             selector: ".faded",
             style: { "opacity": 0.1, "text-opacity": 0.0 }
@@ -279,6 +261,7 @@
       if (d.kind === "topic") {
         const kw = (d.topKeywords || []).slice(0, 12).map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
         const defs = (d.definingPapers || []).map(p => `<li>${escapeHtml(p.title || p.paperId)}</li>`).join("");
+
         el.innerHTML = `
           <div><strong>${escapeHtml(d.label)}</strong></div>
           <div class="muted small">ID: <code>${escapeHtml(d.id)}</code></div>
@@ -292,6 +275,7 @@
       } else {
         const tags = (d.tags || []).slice(0, 12).map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
         const colls = (d.collections || []).slice(0, 8).map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+
         el.innerHTML = `
           <div><strong>${escapeHtml(d.title || d.label)}</strong></div>
           <div class="muted small">Paper key: <code>${escapeHtml(d.id)}</code></div>
@@ -321,7 +305,6 @@
     function applySearch(cy, query) {
       const q = (query || "").trim().toLowerCase();
       cy.elements().removeClass("faded");
-
       if (!q) return;
 
       const matches = cy.nodes().filter(n => {
@@ -331,7 +314,6 @@
         return label.includes(q) || title.includes(q);
       });
 
-      // Keep matches + their neighbors; fade others
       const keep = matches.union(matches.neighborhood());
       cy.elements().difference(keep).addClass("faded");
     }
@@ -354,12 +336,20 @@
     }
 
     (async function () {
+      const status = document.getElementById("status");
+      const dataUrlEl = document.getElementById("dataUrl");
+      dataUrlEl.textContent = GRAPH_URL;
+
       try {
         const graph = await loadGraph();
-        const elements = buildElements(graph);
 
-        const status = document.getElementById("status");
-        status.textContent = `Loaded: ${graph.metadata?.topicCount ?? "?"} topics, ${graph.metadata?.paperCount ?? "?"} papers`;
+        // Show a quick sanity summary
+        const tCount = graph?.topics?.length ?? 0;
+        const pCount = graph?.papers?.length ?? 0;
+        const eCount = graph?.edges?.length ?? 0;
+
+        const elements = buildElements(graph);
+        status.textContent = `Loaded graph.json OK. Topics=${tCount}, Papers=${pCount}, Edges=${eCount}, Elements=${elements.length}`;
 
         const cy = initCytoscape(elements);
         cy.fit(undefined, 30);
@@ -380,8 +370,22 @@
 
       } catch (err) {
         console.error(err);
-        const status = document.getElementById("status");
         status.innerHTML = `<span class="warn">Error:</span> ${escapeHtml(err.message)}`;
+        document.getElementById("detail").textContent = `Error: ${err.message}`;
+
+        // Extra hint for common GitHub Pages failure modes
+        const hint = document.createElement("div");
+        hint.className = "muted small";
+        hint.style.marginTop = "8px";
+        hint.innerHTML = `
+          Common causes:
+          <ul>
+            <li><code>graph.json</code> not deployed to the same Pages folder (root vs docs).</li>
+            <li>Wrong Pages URL or branch/folder in Settings → Pages.</li>
+            <li>graph.json URL returns 404 when opened directly.</li>
+          </ul>
+        `;
+        status.parentElement.appendChild(hint);
       }
     })();
   </script>
