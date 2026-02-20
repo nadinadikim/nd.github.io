@@ -4,130 +4,386 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Zotero Topic Graph</title>
+
+  <!-- Cytoscape (CDN) -->
+  <script src="https://unpkg.com/cytoscape@3.29.2/dist/cytoscape.min.js"></script>
+
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; }
-    .wrap { display: grid; grid-template-columns: 360px 1fr; gap: 20px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; }
-    .topic { padding: 8px 10px; border-radius: 10px; cursor: pointer; }
-    .topic:hover { background: #f5f5f5; }
-    .topic.active { background: #e8f0ff; border: 1px solid #b8ccff; }
-    .muted { color: #666; font-size: 0.92rem; }
-    .pill { display:inline-block; padding: 2px 8px; border:1px solid #ddd; border-radius:999px; margin:2px; font-size:0.85rem; }
-    ul { margin: 8px 0 0 18px; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      height: 100vh;
+    }
+    #cy {
+      width: 100%;
+      height: 100%;
+      background: #fff;
+      border-right: 1px solid #e6e6e6;
+    }
+    .side {
+      padding: 14px;
+      overflow: auto;
+    }
+    .card {
+      border: 1px solid #e6e6e6;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .row { display: flex; gap: 8px; align-items: center; }
+    input[type="text"] { width: 100%; padding: 8px 10px; border:1px solid #ddd; border-radius: 10px; }
+    button { padding: 8px 10px; border:1px solid #ddd; border-radius: 10px; background:#fff; cursor:pointer; }
+    button:hover { background:#f4f4f4; }
+    .muted { color:#666; font-size: 0.92rem; }
+    .pill {
+      display:inline-block; padding: 2px 8px; border:1px solid #ddd;
+      border-radius:999px; margin:2px; font-size:0.85rem;
+    }
+    h1 { margin: 0 0 8px 0; font-size: 1.2rem; }
+    h2 { margin: 0 0 8px 0; font-size: 1rem; }
+    h3 { margin: 10px 0 6px 0; font-size: 0.95rem; }
+    .small { font-size: 0.9rem; }
+    .sep { height: 1px; background: #eee; margin: 10px 0; }
+    .warn { color: #b45309; }
     a { color: inherit; }
+    pre { white-space: pre-wrap; word-break: break-word; }
   </style>
 </head>
 <body>
-  <h1>Zotero Topic Graph</h1>
-  <p class="muted">Loaded from <code>graph.json</code> (GitHub Pages static hosting).</p>
+  <div class="layout">
+    <div id="cy"></div>
 
-  <div class="wrap">
-    <div class="card">
-      <h2 style="margin-top:0">Topics</h2>
-      <div id="topicList" class="muted">Loading…</div>
-    </div>
+    <div class="side">
+      <div class="card">
+        <h1>Zotero Topic Graph</h1>
+        <div class="muted">Loads <code>graph.json</code> from GitHub Pages.</div>
 
-    <div class="card">
-      <h2 style="margin-top:0" id="topicTitle">Select a topic</h2>
-      <div id="topicMeta" class="muted"></div>
-      <h3>Papers</h3>
-      <div id="paperList" class="muted">—</div>
+        <div class="sep"></div>
+
+        <div class="row">
+          <button id="fitBtn">Fit</button>
+          <button id="resetBtn">Reset</button>
+        </div>
+
+        <div class="sep"></div>
+
+        <div class="row">
+          <input id="searchBox" type="text" placeholder="Search topics or papers..." />
+        </div>
+        <div class="muted small" style="margin-top:6px;">
+          Tip: search narrows to matching nodes + neighbors.
+        </div>
+
+        <div class="sep"></div>
+
+        <label class="row small">
+          <input id="toggleTopicsOnly" type="checkbox" />
+          Show topics only
+        </label>
+
+        <div class="sep"></div>
+
+        <div id="status" class="muted small">Loading…</div>
+      </div>
+
+      <div class="card">
+        <h2>Selected</h2>
+        <div id="detail" class="muted">Click a node or edge.</div>
+      </div>
     </div>
   </div>
 
   <script>
+    const escapeHtml = (s) =>
+      (s ?? "").toString()
+        .replaceAll("&","&amp;").replaceAll("<","&lt;")
+        .replaceAll(">","&gt;").replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+
     async function loadGraph() {
       const res = await fetch("./graph.json", { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to load graph.json: ${res.status}`);
       return res.json();
     }
 
-    function escapeHtml(s) {
-      return (s ?? "").toString()
-        .replaceAll("&","&amp;").replaceAll("<","&lt;")
-        .replaceAll(">","&gt;").replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
-    }
-
-    function main(graph) {
+    function buildElements(graph) {
       const topics = graph.topics || [];
       const papers = graph.papers || [];
+      const edges = graph.edges || [];
 
-      // map paperId -> paper object
-      const paperById = new Map(papers.map(p => [p.id, p]));
+      const els = [];
 
-      const topicListEl = document.getElementById("topicList");
-      const topicTitleEl = document.getElementById("topicTitle");
-      const topicMetaEl = document.getElementById("topicMeta");
-      const paperListEl = document.getElementById("paperList");
-
-      let activeId = null;
-
-      function renderTopics() {
-        topicListEl.innerHTML = "";
-        const container = document.createElement("div");
-        topics.forEach(t => {
-          const div = document.createElement("div");
-          div.className = "topic" + (t.id === activeId ? " active" : "");
-          div.innerHTML = `
-            <div><strong>${escapeHtml(t.label)}</strong></div>
-            <div class="muted">${(t.paperIds?.length ?? 0)} papers</div>
-          `;
-          div.onclick = () => {
-            activeId = t.id;
-            renderTopics();
-            renderTopicDetail(t);
-          };
-          container.appendChild(div);
+      // Topic nodes
+      for (const t of topics) {
+        els.push({
+          data: {
+            id: t.id,
+            label: t.label || t.id,
+            kind: "topic",
+            topKeywords: t.topKeywords || [],
+            definingPapers: t.definingPapers || [],
+            paperIds: t.paperIds || []
+          }
         });
-        topicListEl.appendChild(container);
       }
 
-      function renderTopicDetail(t) {
-        topicTitleEl.textContent = t.label || t.id;
-
-        const kw = (t.topKeywords || []).slice(0, 12);
-        const kwHtml = kw.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
-
-        const def = (t.definingPapers || []).map(d => `<li>${escapeHtml(d.title || d.paperId)}</li>`).join("");
-
-        topicMetaEl.innerHTML = `
-          <div><strong>Keywords:</strong> ${kwHtml || "<span class='muted'>none</span>"}</div>
-          <div style="margin-top:8px"><strong>Defining papers:</strong>
-            <ul>${def || "<li class='muted'>none</li>"}</ul>
-          </div>
-        `;
-
-        const ids = t.paperIds || [];
-        const items = ids.map(id => {
-          const p = paperById.get(id) || { id, title: id };
-          const coll = (p.collections || []).filter(Boolean).slice(0, 6).map(c => `<span class="pill">${escapeHtml(c)}</span>`).join("");
-          const tags = (p.tags || []).filter(Boolean).slice(0, 10).map(tag => `<span class="pill">${escapeHtml(tag)}</span>`).join("");
-          return `
-            <div style="margin-bottom:12px">
-              <div><strong>${escapeHtml(p.title || p.id)}</strong></div>
-              <div class="muted">${escapeHtml((p.abstract || "").slice(0, 240))}${(p.abstract && p.abstract.length > 240) ? "…" : ""}</div>
-              <div style="margin-top:6px">${coll}</div>
-              <div style="margin-top:6px">${tags}</div>
-            </div>
-          `;
-        }).join("");
-
-        paperListEl.innerHTML = items || "<span class='muted'>No papers</span>";
+      // Paper nodes
+      for (const p of papers) {
+        els.push({
+          data: {
+            id: p.id,
+            label: p.title || p.id,
+            kind: "paper",
+            title: p.title || "",
+            abstract: p.abstract || "",
+            tags: p.tags || [],
+            collections: p.collections || [],
+            topicId: p.topicId || null
+          }
+        });
       }
 
-      // initial render
-      activeId = topics[0]?.id ?? null;
-      renderTopics();
-      if (activeId) renderTopicDetail(topics[0]);
+      // Edges
+      for (const e of edges) {
+        if (!e.source || !e.target) continue;
+        els.push({
+          data: {
+            id: e.id || `${e.source}__${e.target}`,
+            source: e.source,
+            target: e.target,
+            type: e.type || "edge",
+            weight: (typeof e.weight === "number") ? e.weight : null
+          }
+        });
+      }
+
+      return els;
     }
 
-    loadGraph()
-      .then(main)
-      .catch(err => {
-        document.getElementById("topicList").textContent = err.message;
-        console.error(err);
+    function initCytoscape(elements) {
+      const cy = cytoscape({
+        container: document.getElementById("cy"),
+        elements,
+        style: [
+          // Base node style
+          {
+            selector: "node",
+            style: {
+              "label": "data(label)",
+              "font-size": 10,
+              "text-wrap": "wrap",
+              "text-max-width": 120,
+              "text-valign": "center",
+              "text-halign": "center",
+              "border-width": 1,
+              "border-color": "#cfcfcf",
+              "background-color": "#ffffff",
+              "width": 28,
+              "height": 28
+            }
+          },
+          // Topic nodes (bigger)
+          {
+            selector: 'node[kind="topic"]',
+            style: {
+              "shape": "round-rectangle",
+              "width": 110,
+              "height": 46,
+              "font-size": 11,
+              "border-width": 2
+            }
+          },
+          // Paper nodes (smaller, label hidden until zoom)
+          {
+            selector: 'node[kind="paper"]',
+            style: {
+              "shape": "ellipse",
+              "width": 22,
+              "height": 22,
+              "font-size": 8,
+              "text-opacity": 0.0
+            }
+          },
+          // Show paper labels when zoomed in
+          {
+            selector: 'node[kind="paper"].showLabel',
+            style: { "text-opacity": 1.0 }
+          },
+
+          // Edges
+          {
+            selector: "edge",
+            style: {
+              "curve-style": "bezier",
+              "width": 1,
+              "line-color": "#d0d0d0",
+              "target-arrow-shape": "none",
+              "opacity": 0.9
+            }
+          },
+          // topic-topic edges heavier
+          {
+            selector: 'edge[type="topic-topic"]',
+            style: {
+              "width": 2,
+              "line-color": "#bdbdbd"
+            }
+          },
+
+          // Selection
+          {
+            selector: ":selected",
+            style: {
+              "border-color": "#3b82f6",
+              "border-width": 3,
+              "line-color": "#3b82f6"
+            }
+          },
+
+          // Faded for filtering
+          {
+            selector: ".faded",
+            style: { "opacity": 0.1, "text-opacity": 0.0 }
+          },
+          {
+            selector: "edge.faded",
+            style: { "opacity": 0.08 }
+          }
+        ],
+        layout: {
+          name: "cose",
+          animate: false,
+          nodeRepulsion: 9000,
+          idealEdgeLength: 80,
+          edgeElasticity: 0.2,
+          gravity: 0.3
+        }
       });
+
+      // Toggle paper labels by zoom
+      function updatePaperLabelsByZoom() {
+        const z = cy.zoom();
+        cy.nodes('node[kind="paper"]').toggleClass("showLabel", z >= 1.3);
+      }
+      cy.on("zoom", updatePaperLabelsByZoom);
+      updatePaperLabelsByZoom();
+
+      return cy;
+    }
+
+    function showNodeDetail(node) {
+      const d = node.data();
+      const el = document.getElementById("detail");
+
+      if (d.kind === "topic") {
+        const kw = (d.topKeywords || []).slice(0, 12).map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+        const defs = (d.definingPapers || []).map(p => `<li>${escapeHtml(p.title || p.paperId)}</li>`).join("");
+        el.innerHTML = `
+          <div><strong>${escapeHtml(d.label)}</strong></div>
+          <div class="muted small">ID: <code>${escapeHtml(d.id)}</code></div>
+          <div class="sep"></div>
+          <div><strong>Keywords</strong><div>${kw || "<span class='muted'>none</span>"}</div></div>
+          <div class="sep"></div>
+          <div><strong>Defining papers</strong><ul>${defs || "<li class='muted'>none</li>"}</ul></div>
+          <div class="sep"></div>
+          <div class="muted small"><strong># papers:</strong> ${(d.paperIds || []).length}</div>
+        `;
+      } else {
+        const tags = (d.tags || []).slice(0, 12).map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+        const colls = (d.collections || []).slice(0, 8).map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+        el.innerHTML = `
+          <div><strong>${escapeHtml(d.title || d.label)}</strong></div>
+          <div class="muted small">Paper key: <code>${escapeHtml(d.id)}</code></div>
+          <div class="muted small">Topic: <code>${escapeHtml(d.topicId || "")}</code></div>
+          <div class="sep"></div>
+          <div><strong>Collections</strong><div>${colls || "<span class='muted'>none</span>"}</div></div>
+          <div class="sep"></div>
+          <div><strong>Tags</strong><div>${tags || "<span class='muted'>none</span>"}</div></div>
+          <div class="sep"></div>
+          <div><strong>Abstract</strong></div>
+          <div class="muted small">${escapeHtml(d.abstract || "").slice(0, 1200)}${(d.abstract && d.abstract.length > 1200) ? "…" : ""}</div>
+        `;
+      }
+    }
+
+    function showEdgeDetail(edge) {
+      const d = edge.data();
+      const el = document.getElementById("detail");
+      el.innerHTML = `
+        <div><strong>Edge</strong> <span class="muted small">${escapeHtml(d.type || "")}</span></div>
+        <div class="muted small">Source: <code>${escapeHtml(d.source)}</code></div>
+        <div class="muted small">Target: <code>${escapeHtml(d.target)}</code></div>
+        ${d.weight != null ? `<div class="muted small">Weight: <code>${d.weight}</code></div>` : ""}
+      `;
+    }
+
+    function applySearch(cy, query) {
+      const q = (query || "").trim().toLowerCase();
+      cy.elements().removeClass("faded");
+
+      if (!q) return;
+
+      const matches = cy.nodes().filter(n => {
+        const d = n.data();
+        const label = (d.label || "").toLowerCase();
+        const title = (d.title || "").toLowerCase();
+        return label.includes(q) || title.includes(q);
+      });
+
+      // Keep matches + their neighbors; fade others
+      const keep = matches.union(matches.neighborhood());
+      cy.elements().difference(keep).addClass("faded");
+    }
+
+    function setTopicsOnly(cy, topicsOnly) {
+      cy.nodes('node[kind="paper"]').style("display", topicsOnly ? "none" : "element");
+      cy.edges('[type="topic-paper"]').style("display", topicsOnly ? "none" : "element");
+    }
+
+    function resetView(cy) {
+      cy.elements().removeClass("faded");
+      cy.nodes().unselect();
+      cy.edges().unselect();
+      document.getElementById("searchBox").value = "";
+      document.getElementById("toggleTopicsOnly").checked = false;
+      setTopicsOnly(cy, false);
+      cy.layout({ name: "cose", animate: false, nodeRepulsion: 9000, idealEdgeLength: 80, edgeElasticity: 0.2, gravity: 0.3 }).run();
+      cy.fit(undefined, 30);
+      document.getElementById("detail").textContent = "Click a node or edge.";
+    }
+
+    (async function () {
+      try {
+        const graph = await loadGraph();
+        const elements = buildElements(graph);
+
+        const status = document.getElementById("status");
+        status.textContent = `Loaded: ${graph.metadata?.topicCount ?? "?"} topics, ${graph.metadata?.paperCount ?? "?"} papers`;
+
+        const cy = initCytoscape(elements);
+        cy.fit(undefined, 30);
+
+        cy.on("tap", "node", (evt) => showNodeDetail(evt.target));
+        cy.on("tap", "edge", (evt) => showEdgeDetail(evt.target));
+
+        document.getElementById("fitBtn").onclick = () => cy.fit(undefined, 30);
+        document.getElementById("resetBtn").onclick = () => resetView(cy);
+
+        document.getElementById("searchBox").addEventListener("input", (e) => {
+          applySearch(cy, e.target.value);
+        });
+
+        document.getElementById("toggleTopicsOnly").addEventListener("change", (e) => {
+          setTopicsOnly(cy, e.target.checked);
+        });
+
+      } catch (err) {
+        console.error(err);
+        const status = document.getElementById("status");
+        status.innerHTML = `<span class="warn">Error:</span> ${escapeHtml(err.message)}`;
+      }
+    })();
   </script>
 </body>
 </html>
