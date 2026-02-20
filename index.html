@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Zotero Topic Graph</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; }
+    .wrap { display: grid; grid-template-columns: 360px 1fr; gap: 20px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; }
+    .topic { padding: 8px 10px; border-radius: 10px; cursor: pointer; }
+    .topic:hover { background: #f5f5f5; }
+    .topic.active { background: #e8f0ff; border: 1px solid #b8ccff; }
+    .muted { color: #666; font-size: 0.92rem; }
+    .pill { display:inline-block; padding: 2px 8px; border:1px solid #ddd; border-radius:999px; margin:2px; font-size:0.85rem; }
+    ul { margin: 8px 0 0 18px; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <h1>Zotero Topic Graph</h1>
+  <p class="muted">Loaded from <code>graph.json</code> (GitHub Pages static hosting).</p>
+
+  <div class="wrap">
+    <div class="card">
+      <h2 style="margin-top:0">Topics</h2>
+      <div id="topicList" class="muted">Loading…</div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0" id="topicTitle">Select a topic</h2>
+      <div id="topicMeta" class="muted"></div>
+      <h3>Papers</h3>
+      <div id="paperList" class="muted">—</div>
+    </div>
+  </div>
+
+  <script>
+    async function loadGraph() {
+      const res = await fetch("./graph.json", { cache: "no-store" });
+      if (!res.ok) throw new Error(`Failed to load graph.json: ${res.status}`);
+      return res.json();
+    }
+
+    function escapeHtml(s) {
+      return (s ?? "").toString()
+        .replaceAll("&","&amp;").replaceAll("<","&lt;")
+        .replaceAll(">","&gt;").replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    function main(graph) {
+      const topics = graph.topics || [];
+      const papers = graph.papers || [];
+
+      // map paperId -> paper object
+      const paperById = new Map(papers.map(p => [p.id, p]));
+
+      const topicListEl = document.getElementById("topicList");
+      const topicTitleEl = document.getElementById("topicTitle");
+      const topicMetaEl = document.getElementById("topicMeta");
+      const paperListEl = document.getElementById("paperList");
+
+      let activeId = null;
+
+      function renderTopics() {
+        topicListEl.innerHTML = "";
+        const container = document.createElement("div");
+        topics.forEach(t => {
+          const div = document.createElement("div");
+          div.className = "topic" + (t.id === activeId ? " active" : "");
+          div.innerHTML = `
+            <div><strong>${escapeHtml(t.label)}</strong></div>
+            <div class="muted">${(t.paperIds?.length ?? 0)} papers</div>
+          `;
+          div.onclick = () => {
+            activeId = t.id;
+            renderTopics();
+            renderTopicDetail(t);
+          };
+          container.appendChild(div);
+        });
+        topicListEl.appendChild(container);
+      }
+
+      function renderTopicDetail(t) {
+        topicTitleEl.textContent = t.label || t.id;
+
+        const kw = (t.topKeywords || []).slice(0, 12);
+        const kwHtml = kw.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+
+        const def = (t.definingPapers || []).map(d => `<li>${escapeHtml(d.title || d.paperId)}</li>`).join("");
+
+        topicMetaEl.innerHTML = `
+          <div><strong>Keywords:</strong> ${kwHtml || "<span class='muted'>none</span>"}</div>
+          <div style="margin-top:8px"><strong>Defining papers:</strong>
+            <ul>${def || "<li class='muted'>none</li>"}</ul>
+          </div>
+        `;
+
+        const ids = t.paperIds || [];
+        const items = ids.map(id => {
+          const p = paperById.get(id) || { id, title: id };
+          const coll = (p.collections || []).filter(Boolean).slice(0, 6).map(c => `<span class="pill">${escapeHtml(c)}</span>`).join("");
+          const tags = (p.tags || []).filter(Boolean).slice(0, 10).map(tag => `<span class="pill">${escapeHtml(tag)}</span>`).join("");
+          return `
+            <div style="margin-bottom:12px">
+              <div><strong>${escapeHtml(p.title || p.id)}</strong></div>
+              <div class="muted">${escapeHtml((p.abstract || "").slice(0, 240))}${(p.abstract && p.abstract.length > 240) ? "…" : ""}</div>
+              <div style="margin-top:6px">${coll}</div>
+              <div style="margin-top:6px">${tags}</div>
+            </div>
+          `;
+        }).join("");
+
+        paperListEl.innerHTML = items || "<span class='muted'>No papers</span>";
+      }
+
+      // initial render
+      activeId = topics[0]?.id ?? null;
+      renderTopics();
+      if (activeId) renderTopicDetail(topics[0]);
+    }
+
+    loadGraph()
+      .then(main)
+      .catch(err => {
+        document.getElementById("topicList").textContent = err.message;
+        console.error(err);
+      });
+  </script>
+</body>
+</html>
